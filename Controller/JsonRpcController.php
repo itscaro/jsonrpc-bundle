@@ -2,10 +2,10 @@
 
 namespace Wa72\JsonRpcBundle\Controller;
 
+use Symfony\Component\DependencyInjection\ContainerAware;
 use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\DependencyInjection\ContainerAware;
 
 /**
  * Controller for executing JSON-RPC 2.0 requests
@@ -89,21 +89,49 @@ class JsonRpcController extends ContainerAware
     public function execute(Request $httprequest)
     {
         $json = $httprequest->getContent();
-        $request = json_decode($json, true);
-        $requestId = (isset($request['id']) ? $request['id'] : null);
+        $requestAsObject = json_decode($json);
 
-        if ($request === null) {
+        if (is_array($requestAsObject)) {
+            // Batch request
+
+            $responses = [];
+
+            foreach ($requestAsObject as $singleRequest) {
+                $singleResponse = $this->_execute(json_encode($singleRequest));
+
+                // Eliminate notification response
+                if ($singleResponse->getContent()) {
+                    $responses[] = json_decode($singleResponse->getContent());
+                }
+            }
+
+            return new Response(json_encode($responses), 200, array('Content-Type' => 'application/json'));
+        } else {
+            return $this->_execute($json);
+        }
+    }
+
+    /**
+     * @param string $json
+     * @return Response
+     */
+    private function _execute($json)
+    {
+        $requestAsArray = json_decode($json, true);
+        $requestId = (isset($requestAsArray['id']) ? $requestAsArray['id'] : null);
+
+        if ($requestAsArray === null) {
             return $this->getErrorResponse(self::PARSE_ERROR, null);
-        } elseif (!(isset($request['jsonrpc']) && isset($request['method']) && $request['jsonrpc'] == '2.0')) {
+        } elseif (!(isset($requestAsArray['jsonrpc']) && isset($requestAsArray['method']) && $requestAsArray['jsonrpc'] == '2.0')) {
             return $this->getErrorResponse(self::INVALID_REQUEST, $requestId);
         }
 
-        if (in_array($request['method'], array_keys($this->functions))) {
-            $servicename = $this->functions[$request['method']]['service'];
-            $method = $this->functions[$request['method']]['method'];
+        if (in_array($requestAsArray['method'], array_keys($this->functions))) {
+            $servicename = $this->functions[$requestAsArray['method']]['service'];
+            $method = $this->functions[$requestAsArray['method']]['method'];
         } else {
-            if (count($this->services) && strpos($request['method'], ':') > 0) {
-                list($servicename, $method) = explode(':', $request['method']);
+            if (count($this->services) && strpos($requestAsArray['method'], ':') > 0) {
+                list($servicename, $method) = explode(':', $requestAsArray['method']);
                 if (!in_array($servicename, $this->services)) {
                     return $this->getErrorResponse(self::METHOD_NOT_FOUND, $requestId);
                 }
@@ -116,7 +144,7 @@ class JsonRpcController extends ContainerAware
         } catch (ServiceNotFoundException $e) {
             return $this->getErrorResponse(self::METHOD_NOT_FOUND, $requestId);
         }
-        $params = (isset($request['params']) ? $request['params'] : array());
+        $params = (isset($requestAsArray['params']) ? $requestAsArray['params'] : array());
 
         if (is_callable(array($service, $method))) {
             $r = new \ReflectionMethod($service, $method);
@@ -173,9 +201,9 @@ class JsonRpcController extends ContainerAware
 
             if ($this->container->has('jms_serializer')) {
                 $functionConfig = (
-                    isset($this->functions[$request['method']])
-                        ? $this->functions[$request['method']]
-                        : array()
+                isset($this->functions[$requestAsArray['method']])
+                    ? $this->functions[$requestAsArray['method']]
+                    : array()
                 );
                 $serializationContext = $this->getSerializationContext($functionConfig);
                 $response = $this->container->get('jms_serializer')->serialize($response, 'json', $serializationContext);
@@ -183,10 +211,15 @@ class JsonRpcController extends ContainerAware
                 $response = json_encode($response);
             }
 
-            return new Response($response, 200, array('Content-Type' => 'application/json'));
+            if ($requestId) {
+                return new Response($response, 200, array('Content-Type' => 'application/json'));
+            } else {
+                return new Response();
+            }
         } else {
             return $this->getErrorResponse(self::METHOD_NOT_FOUND, $requestId);
         }
+
     }
 
     /**
@@ -272,7 +305,11 @@ class JsonRpcController extends ContainerAware
 
         $response['id'] = $id;
 
-        return new Response(json_encode($response), 200, array('Content-Type' => 'application/json'));
+        if ($id) {
+            return new Response(json_encode($response), 200, array('Content-Type' => 'application/json'));
+        } else {
+            return new Response();
+        }
     }
 
     /**
@@ -313,7 +350,7 @@ class JsonRpcController extends ContainerAware
 
         return $serializationContext;
     }
-    
+
     /**
      * Finds whether a variable is an associative array
      *
