@@ -2,6 +2,7 @@
 
 namespace Wa72\JsonRpcBundle\DependencyInjection;
 
+use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
 use Symfony\Component\Config\Definition\Builder\TreeBuilder;
 use Symfony\Component\Config\Definition\ConfigurationInterface;
 
@@ -18,8 +19,8 @@ class Configuration implements ConfigurationInterface
     public function getConfigTreeBuilder()
     {
         $treeBuilder = new TreeBuilder();
-        $rootNode = $treeBuilder->root('wa72_json_rpc');
-
+        $rootNode = $treeBuilder->root('wa2_json_rpc');
+        /* @var $rootNode ArrayNodeDefinition*/
         $rootNode
             ->children()
                 ->arrayNode('functions')
@@ -42,6 +43,12 @@ class Configuration implements ConfigurationInterface
                                 ->end()
                             ->end()
                         ->end()
+                    ->end()
+                ->end()
+                ->arrayNode('serializer')
+                    ->children()
+                        ->scalarNode('service')->defaultValue('jms_serialize')->end()
+                        ->booleanNode('serialize_null')->defaultTrue()->end()
                     ->end()
                 ->end()
             ->end();

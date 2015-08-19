@@ -11,7 +11,7 @@ Of course, it doesn't simply expose all your services' methods to the public, bu
 Installation
 ------------
 
-1. Add "wa72/jsonrpc-bundle" as requirement to your composer.json
+1. Add "itscaro/jsonrpc-bundle" as requirement to your composer.json
 
 2. Add "new Wa72\\JsonRpcBundle\\Wa72JsonRpcBundle()" in your AppKernel::registerBundles() function
 
@@ -25,6 +25,7 @@ Installation
         prefix:   /jsonrpc
 
 Your JSON-RPC web service will then be available in your project calling the /jsonrpc/ URL.
+A Discovery JSON is available at /jsonrpc/discover/.
 
 Configuration
 -------------

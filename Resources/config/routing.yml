@@ -1,3 +1,7 @@
-wa72_json_rpc:
+wa72_jsonrpc:
     pattern: /
     defaults: { _controller: wa72_jsonrpc.jsonrpccontroller:execute }
+
+wa72_jsonrpc_discover:
+    pattern: /discover/
+    defaults: { _controller: wa72_jsonrpc.jsonrpccontroller:discover }

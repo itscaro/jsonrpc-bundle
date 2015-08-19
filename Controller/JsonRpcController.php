@@ -2,10 +2,13 @@
 
 namespace Wa72\JsonRpcBundle\Controller;
 
+use Doctrine\Common\Annotations\DocParser;
 use Symfony\Component\DependencyInjection\ContainerAware;
 use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Zend\Code\Reflection\DocBlock\Tag\ParamTag;
+use Zend\Code\Reflection\DocBlock\Tag\ReturnTag;
 
 /**
  * Controller for executing JSON-RPC 2.0 requests
@@ -57,6 +60,12 @@ class JsonRpcController extends ContainerAware
     private $functions = array();
 
     /**
+     * Configuration for serializer
+     * @var array
+     */
+    private $serializer = array();
+
+    /**
      * Array of names of fully exposed services (all methods of this services are allowed to be called)
      *
      * @var array $services
@@ -79,16 +88,19 @@ class JsonRpcController extends ContainerAware
             if (!is_array($config['functions'])) throw new \InvalidArgumentException('Configuration parameter "functions" must be array');
             $this->functions = $config['functions'];
         }
+        if (isset($config['serializer'])) {
+            $this->serializer = $config['serializer'];
+        }
         $this->setContainer($container);
     }
 
     /**
-     * @param Request $httprequest
+     * @param Request $inRequest
      * @return Response
      */
-    public function execute(Request $httprequest)
+    public function execute(Request $inRequest)
     {
-        $json = $httprequest->getContent();
+        $json = $inRequest->getContent();
         $requestAsObject = json_decode($json);
 
         if (is_array($requestAsObject)) {
@@ -105,7 +117,7 @@ class JsonRpcController extends ContainerAware
                 }
             }
 
-            return new Response(json_encode($responses), 200, array('Content-Type' => 'application/json'));
+            return new Response(json_encode($responses), 200, ['Content-Type' => 'application/json']);
         } else {
             return $this->_execute($json);
         }
@@ -172,7 +184,8 @@ class JsonRpcController extends ContainerAware
                     if (isset($params[$rp->name])) {
                         $newparams[] = $params[$rp->name];
                     } else {
-                        $newparams[] = null;
+                        // Is optional but not set, do not set then.
+//                        $newparams[] = $rp->isArray() ? [] : null;
                     }
                 }
                 $params = $newparams;
@@ -199,20 +212,20 @@ class JsonRpcController extends ContainerAware
             $response['result'] = $result;
             $response['id'] = $requestId;
 
-            if ($this->container->has('jms_serializer')) {
+            if ($this->container->has($this->serializer['service'])) {
                 $functionConfig = (
                 isset($this->functions[$requestAsArray['method']])
                     ? $this->functions[$requestAsArray['method']]
                     : array()
                 );
                 $serializationContext = $this->getSerializationContext($functionConfig);
-                $response = $this->container->get('jms_serializer')->serialize($response, 'json', $serializationContext);
+                $response = $this->container->get($this->serializer['service'])->serialize($response, 'json', $serializationContext);
             } else {
                 $response = json_encode($response);
             }
 
             if ($requestId) {
-                return new Response($response, 200, array('Content-Type' => 'application/json'));
+                return new Response($response, 200, ['Content-Type' => 'application/json']);
             } else {
                 return new Response();
             }
@@ -220,6 +233,77 @@ class JsonRpcController extends ContainerAware
             return $this->getErrorResponse(self::METHOD_NOT_FOUND, $requestId);
         }
 
+    }
+
+    public function discover()
+    {
+        $annotationReader = $this->container->get('annotation_reader');
+        /* @var $annotationReader \Doctrine\Common\Annotations\AnnotationReader */
+
+        foreach ($this->services as $serviceName) {
+            $service = $this->container->get($serviceName);
+            $rService = new \Zend\Code\Reflection\ClassReflection($service);
+
+            $jsonrpcMethods[$serviceName]['service'] = $serviceName;
+            $jsonrpcMethods[$serviceName]['description'] = !$rService->getDocBlock() ?: $rService->getDocBlock()->getShortDescription();
+
+            foreach ($rService->getMethods(\ReflectionMethod::IS_PUBLIC) as $rMethod) {
+
+                if (strpos($rMethod->getName(), '__') !== 0) {
+                    $currentMethod = [];
+
+                    $_tagsParam = !$rMethod->getDocBlock() ? [] : $rMethod->getDocBlock()->getTags('param');
+                    $_tagsReturn = !$rMethod->getDocBlock() ? null : $rMethod->getDocBlock()->getTag('return');
+                    /* @var $_tagsParam ParamTag[] */
+                    /* @var $_tagsReturn ReturnTag */
+
+                    $currentMethod['method'] = "{$serviceName}:" . $rMethod->getName();
+                    $currentMethod['description'] = !$rMethod->getDocBlock() ?: $rMethod->getDocBlock()->getShortDescription();
+                    $currentMethod['parameters'] = [];
+                    if (!empty($_tagsParam)) {
+                        foreach ($_tagsParam as $_tagParam) {
+                            if (strpos($_tagParam->getVariableName(), '$') === 0) {
+                                $_name = substr($_tagParam->getVariableName(), 1);
+                            } else {
+                                $_name = $_tagParam->getVariableName();
+                            }
+                            $currentMethod['parameters'][$_name] = [
+                                'description' => $_tagParam->getDescription(),
+                                'types' => count($_tagParam->getTypes()) == 1 ? $_tagParam->getTypes()[0] : $_tagParam->getTypes(),
+                            ];
+                        }
+                    }
+
+                    foreach ($rMethod->getParameters() as $rParameter) {
+                        if (!isset($currentMethod['parameters'][$rParameter->getName()])) {
+                            $currentMethod['parameters'][$rParameter->getName()] = [];
+                        }
+                        $currentMethod['parameters'][$rParameter->getName()] = array_merge(
+                            $currentMethod['parameters'][$rParameter->getName()],
+                            [
+                                'nullable' => $rParameter->allowsNull(),
+                                'array' => $rParameter->isArray(),
+                                'optional' => $rParameter->isOptional(),
+                            ]
+                        );
+                        if ($rParameter->isDefaultValueAvailable()) {
+                            $currentMethod['parameters'][$rParameter->getName()]['default'] = $rParameter->getDefaultValue();
+                        }
+                    }
+
+                    if ($_tagsReturn) {
+                        $currentMethod['return'] = [
+                            'description' => $_tagsReturn->getDescription(),
+                            'types' => count($_tagsReturn->getTypes()) == 1 ? $_tagsReturn->getTypes()[0] : $_tagsReturn->getTypes(),
+                        ];
+                    }
+
+                    $jsonrpcMethods[$serviceName]['methods'][$rMethod->getName()] = $currentMethod;
+                }
+            }
+        }
+
+        return new Response(json_encode($jsonrpcMethods), 200, ['Content-Type' => 'application/json']);
     }
 
     /**
@@ -306,7 +390,7 @@ class JsonRpcController extends ContainerAware
         $response['id'] = $id;
 
         if ($id) {
-            return new Response(json_encode($response), 200, array('Content-Type' => 'application/json'));
+            return new Response(json_encode($response), 200, ['Content-Type' => 'application/json']);
         } else {
             return new Response();
         }
@@ -346,6 +430,13 @@ class JsonRpcController extends ContainerAware
             }
         } else {
             $serializationContext = $this->serializationContext;
+        }
+
+        if ($this->serializer['serialize_null']) {
+            if ($serializationContext === null) {
+                $serializationContext = \JMS\Serializer\SerializationContext::create();
+            }
+            $serializationContext->setSerializeNull(true);
         }
 
         return $serializationContext;
