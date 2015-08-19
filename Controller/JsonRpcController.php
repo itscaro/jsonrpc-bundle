@@ -282,7 +282,6 @@ class JsonRpcController extends ContainerAware
                             $currentMethod['parameters'][$rParameter->getName()],
                             [
                                 'nullable' => $rParameter->allowsNull(),
-                                'array' => $rParameter->isArray(),
                                 'optional' => $rParameter->isOptional(),
                             ]
                         );
